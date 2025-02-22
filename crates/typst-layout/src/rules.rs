@@ -3,7 +3,7 @@ use ecow::{EcoVec, eco_format};
 use smallvec::smallvec;
 use typst_library::diag::{At, SourceResult, bail};
 use typst_library::foundations::{
-    Content, Context, NativeElement, NativeRuleMap, Packed, Resolve, ShowFn, Smart,
+    Content, Context, NativeElement, NativeRuleMap, Label, Packed, Resolve, ShowFn, Smart,
     StyleChain, Synthesize, Target, dict,
 };
 use typst_library::introspection::{Counter, Locator, LocatorLink};
@@ -33,7 +33,7 @@ use typst_library::visualize::{
     CircleElem, CurveElem, EllipseElem, ImageElem, LineElem, PathElem, PolygonElem,
     RectElem, SquareElem, Stroke,
 };
-use typst_utils::{Get, Numeric};
+use typst_utils::{Get, Numeric, PicoStr};
 
 /// Register show rules for the [paged target](Target::Paged).
 pub fn register(rules: &mut NativeRuleMap) {
@@ -322,11 +322,17 @@ const FIGURE_RULE: ShowFn<FigureElem> = |elem, _, styles| {
     // Ensure that the body is considered a paragraph.
     realized += ParbreakElem::shared().clone().spanned(span);
 
+    let label = elem.label().unwrap_or_else(|| Label::new(PicoStr::intern(typst_utils::hash128(&realized).to_string().as_str()))
+        // Won't panic because given String is not empty.
+        .unwrap());
+
     // Wrap the contents in a block.
     realized = BlockElem::new()
         .with_body(Some(BlockBody::Content(realized)))
+        .with_floatable(true)
         .pack()
-        .spanned(span);
+        .spanned(span)
+        .labelled(label);
 
     // Wrap in a float.
     if let Some(align) = elem.placement.get(styles) {
