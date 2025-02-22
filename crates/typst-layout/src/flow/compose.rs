@@ -18,7 +18,7 @@ use typst_syntax::Span;
 use typst_utils::{NonZeroExt, Numeric};
 
 use super::{
-    Config, FlowMode, FlowResult, LineNumberConfig, PlacedChild, Stop, Work, distribute,
+    Config, FlowMode, FlowResult, LineNumberConfig, FloatableChild, Stop, Work, distribute,
 };
 
 /// Composes the contents of a single page/region. A region can have multiple
@@ -256,7 +256,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
     /// `false` elsewhere.
     pub fn float(
         &mut self,
-        placed: &'b PlacedChild<'a>,
+        placed: FloatableChild<'a, 'b>,
         regions: &Regions,
         clearance: bool,
         migratable: bool,
@@ -274,18 +274,27 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
             return Ok(());
         }
 
-        // Determine the base size of the chosen scope.
-        let base = match placed.scope {
-            PlacementScope::Column => regions.base(),
-            PlacementScope::Parent => self.page_base,
+        // Lay out the placed element and save the base size of the chosen scope for later.
+        let base;
+        let frame = match placed {
+            FloatableChild::Float(placed) => {
+                base = match placed.scope {
+                    PlacementScope::Column => regions.base(),
+                    PlacementScope::Parent => self.page_base,
+                };
+                // Lay out the placed element.
+                placed.layout(self.engine, base)?
+            },
+            FloatableChild::Block(block) => {
+                base = regions.base();
+                block.layout(self.engine, Region { size: regions.base(), expand: regions.expand })?
+            }
         };
 
-        // Lay out the placed element.
-        let frame = placed.layout(self.engine, base)?;
 
         // Determine the remaining space in the scope. This is exact for column
         // placement, but only an approximation for page placement.
-        let remaining = match placed.scope {
+        let remaining = match placed.scope() {
             PlacementScope::Column => regions.size.y,
             PlacementScope::Parent => {
                 let remaining: Abs = regions
@@ -298,7 +307,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         };
 
         // We only require clearance if there is other content.
-        let clearance = if clearance { placed.clearance } else { Abs::zero() };
+        let clearance = if clearance { placed.clearance() } else { Abs::zero() };
         let need = frame.height() + clearance;
 
         // If the float doesn't fit, queue it for the next region.
@@ -312,7 +321,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
 
         // Determine the float's vertical alignment. We can unwrap the inner
         // `Option` because `Custom(None)` is checked for during collection.
-        let align_y = placed.align_y.map(Option::unwrap).unwrap_or_else(|| {
+        let align_y = placed.align_y().map(Option::unwrap).unwrap_or_else(|| {
             // When the float's vertical midpoint would be above the middle of
             // the page if it were layouted in-flow, we use top alignment.
             // Otherwise, we use bottom alignment.
@@ -323,7 +332,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         });
 
         // Select the insertion area where we'll put this float.
-        let area = match placed.scope {
+        let area = match placed.scope() {
             PlacementScope::Column => &mut self.column_insertions,
             PlacementScope::Parent => &mut self.page_insertions,
         };
@@ -333,7 +342,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         area.skips.push(loc);
 
         // Trigger relayout.
-        Err(Stop::Relayout(placed.scope))
+        Err(Stop::Relayout(placed.scope()))
     }
 
     /// Lays out footnotes in the `frame` if this is the root flow and there are
@@ -622,8 +631,8 @@ fn layout_footnote(
 /// An additive list of insertions.
 #[derive(Default)]
 struct Insertions<'a, 'b> {
-    top_floats: Vec<(&'b PlacedChild<'a>, Frame)>,
-    bottom_floats: Vec<(&'b PlacedChild<'a>, Frame)>,
+    top_floats: Vec<(FloatableChild<'a, 'b>, Frame)>,
+    bottom_floats: Vec<(FloatableChild<'a, 'b>, Frame)>,
     footnotes: Vec<Frame>,
     footnote_separator: Option<Frame>,
     top_size: Abs,
@@ -636,13 +645,13 @@ impl<'a, 'b> Insertions<'a, 'b> {
     /// Add a float to the top or bottom area.
     fn push_float(
         &mut self,
-        placed: &'b PlacedChild<'a>,
+        placed: FloatableChild<'a, 'b>,
         frame: Frame,
         align_y: FixedAlignment,
     ) {
         self.width.set_max(frame.width());
 
-        let amount = frame.height() + placed.clearance;
+        let amount = frame.height() + placed.clearance();
         let pair = (placed, frame);
 
         if align_y == FixedAlignment::Start {
@@ -695,10 +704,10 @@ impl<'a, 'b> Insertions<'a, 'b> {
         let mut offset_bottom = size.y - self.bottom_size;
 
         for (placed, frame) in self.top_floats {
-            let x = placed.align_x.position(size.x - frame.width());
+            let x = placed.align_x().position(size.x - frame.width());
             let y = offset_top;
-            let delta = placed.delta.zip_map(size, Rel::relative_to).to_point();
-            offset_top += frame.height() + placed.clearance;
+            let delta = placed.delta().zip_map(size, Rel::relative_to).to_point();
+            offset_top += frame.height() + placed.clearance();
             output.push_frame(Point::new(x, y) + delta, frame);
         }
 
@@ -713,10 +722,10 @@ impl<'a, 'b> Insertions<'a, 'b> {
         // with `\usepackage[bottom]{footmisc}`. We could also consider adding
         // configuration in the future.
         for (placed, frame) in self.bottom_floats {
-            offset_bottom += placed.clearance;
-            let x = placed.align_x.position(size.x - frame.width());
+            offset_bottom += placed.clearance();
+            let x = placed.align_x().position(size.x - frame.width());
             let y = offset_bottom;
-            let delta = placed.delta.zip_map(size, Rel::relative_to).to_point();
+            let delta = placed.delta().zip_map(size, Rel::relative_to).to_point();
             offset_bottom += frame.height();
             output.push_frame(Point::new(x, y) + delta, frame);
         }

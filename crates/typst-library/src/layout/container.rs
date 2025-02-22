@@ -364,6 +364,22 @@ pub struct BlockElem {
     #[default(false)]
     pub sticky: bool,
 
+    /// Whether this block can float to the next region if it does not fit into
+    /// the current one.
+    ///
+    /// This makes it possible to push a figure to the next column while continuing
+    /// the flow of text until the end of the column
+    ///
+    /// ```example
+    /// >>> #set page(height: 140pt, columns: 2)
+    /// // Disable stickiness of headings.
+    /// #lorem(20)
+    /// #figure(rect(width: 120pt, height: 50pt, fill: black, placement: none))
+    /// #lorem(20)
+    /// ```
+    #[default(false)]
+    pub floatable: bool,
+
     /// The contents of the block.
     #[positional]
     pub body: Option<BlockBody>,

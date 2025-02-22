@@ -17,13 +17,13 @@ use rustc_hash::FxHashSet;
 use typst_library::World;
 use typst_library::diag::{At, SourceDiagnostic, SourceResult, bail};
 use typst_library::engine::{Engine, Route, Sink, Traced};
-use typst_library::foundations::{Content, Packed, Resolve, StyleChain};
+use typst_library::foundations::{Content, Packed, Resolve, Smart, StyleChain};
 use typst_library::introspection::{
     Introspector, Location, Locator, LocatorLink, SplitLocator, Tag,
 };
 use typst_library::layout::{
-    Abs, ColumnsElem, Dir, Em, Fragment, Frame, PageElem, PlacementScope, Region,
-    Regions, Rel, Size,
+    Abs, Axes, ColumnsElem, Dir, Em, FixedAlignment, Fragment, Frame, PageElem,
+    PlacementScope, Region, Regions, Rel, Size,
 };
 use typst_library::model::{FootnoteElem, FootnoteEntry, LineNumberingScope, ParLine};
 use typst_library::pdf::ArtifactKind;
@@ -284,6 +284,56 @@ fn configuration<'x>(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FloatableChild<'a, 'b> {
+    Block(&'b SingleChild<'a>),
+    Float(&'b PlacedChild<'a>),
+}
+
+impl<'a, 'b> FloatableChild<'a, 'b> {
+    pub fn location(&self) -> Location {
+        match self {
+            Self::Block(elem) => elem.location(),
+            Self::Float(elem) => elem.location(),
+        }
+    }
+
+    pub fn delta(&self) -> Axes<Rel<Abs>> {
+        match self {
+            Self::Block(_) => Default::default(),
+            Self::Float(elem) => elem.delta,
+        }
+    }
+
+    pub fn clearance(&self) -> Abs {
+        match self {
+            Self::Block(_) => Abs::zero(),
+            Self::Float(elem) => elem.clearance,
+        }
+    }
+
+    pub fn align_x(&self) -> FixedAlignment {
+        match self {
+            Self::Block(_) => FixedAlignment::Center,
+            Self::Float(elem) => elem.align_x,
+        }
+    }
+
+    pub fn scope(&self) -> PlacementScope {
+        match self {
+            Self::Block(_) => PlacementScope::Column,
+            Self::Float(elem) => elem.scope,
+        }
+    }
+
+    pub fn align_y(&self) -> Smart<Option<FixedAlignment>> {
+        match self {
+            Self::Block(_) => Smart::Custom(Some(FixedAlignment::Start)),
+            Self::Float(elem) => elem.align_y,
+        }
+    }
+}
+
 /// The work that is left to do by flow layout.
 ///
 /// The lifetimes 'a and 'b are used across flow layout:
@@ -296,7 +346,7 @@ struct Work<'a, 'b> {
     /// Leftovers from a breakable block.
     spill: Option<MultiSpill<'a, 'b>>,
     /// Queued floats that didn't fit in previous regions.
-    floats: EcoVec<&'b PlacedChild<'a>>,
+    floats: EcoVec<FloatableChild<'a, 'b>>,
     /// Queued footnotes that didn't fit in previous regions.
     footnotes: EcoVec<Packed<FootnoteElem>>,
     /// Spilled frames of a footnote that didn't fully fit. Similar to `spill`.

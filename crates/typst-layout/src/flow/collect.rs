@@ -237,6 +237,7 @@ impl<'a> Collector<'a, '_, '_> {
         let alone = self.children.len() == 1;
         let sticky = elem.sticky.get(styles);
         let breakable = elem.breakable.get(styles);
+        let floatable = elem.floatable.get(styles);
         let fr = match elem.height.get(styles) {
             Sizing::Fr(fr) => Some(fr),
             _ => None,
@@ -257,6 +258,7 @@ impl<'a> Collector<'a, '_, '_> {
                 sticky,
                 alone,
                 fr,
+                floatable,
                 elem,
                 styles,
                 locator,
@@ -380,6 +382,7 @@ pub struct SingleChild<'a> {
     pub sticky: bool,
     pub alone: bool,
     pub fr: Option<Fr>,
+    pub floatable: bool,
     elem: &'a Packed<BlockElem>,
     styles: StyleChain<'a>,
     locator: Locator<'a>,
@@ -405,6 +408,10 @@ impl SingleChild<'_> {
                 region,
             )
         })
+    }
+
+    pub fn location(&self) -> Location {
+        self.elem.location().unwrap()
     }
 }
 

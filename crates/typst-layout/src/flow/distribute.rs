@@ -5,8 +5,8 @@ use typst_library::layout::{
 use typst_utils::Numeric;
 
 use super::{
-    Child, Composer, FlowResult, LineChild, MultiChild, MultiSpill, PlacedChild,
-    SingleChild, Stop, Work,
+    Child, Composer, FloatableChild, FlowResult, LineChild, MultiChild, MultiSpill,
+    PlacedChild, SingleChild, Stop, Work
 };
 
 /// Distributes as many children as fit from `composer.work` into the first
@@ -267,7 +267,12 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
         // If the block doesn't fit and a followup region may improve things,
         // finish the region.
         if !self.regions.size.y.fits(frame.height()) && self.regions.may_progress() {
-            return Err(Stop::Finish(false));
+            if single.floatable {
+                self.composer.work.floats.push(FloatableChild::Block(single));
+                return Ok(())
+            } else {
+                return Err(Stop::Finish(false));
+            }
         }
 
         self.frame(frame, single.align, single.sticky, false)
@@ -395,7 +400,7 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
             let weak_spacing = self.weak_spacing();
             self.regions.size.y += weak_spacing;
             self.composer.float(
-                placed,
+                FloatableChild::Float(placed),
                 &self.regions,
                 self.items.iter().any(|item| matches!(item, Item::Frame(..))),
                 true,
