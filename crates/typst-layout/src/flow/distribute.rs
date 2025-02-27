@@ -76,8 +76,10 @@ enum Item<'a, 'b> {
     Tag(&'a Tag),
     /// Absolute spacing and its weakness level.
     Abs(Abs, u8),
-    /// Fractional spacing or a fractional block.
-    Fr(Fr, Option<&'b SingleChild<'a>>),
+    /// Fractional spacing.
+    Fr(Fr, Abs, u8),
+    /// A fractional block
+    FrChild(Fr, &'b SingleChild<'a>),
     /// A frame for a laid out line or block.
     Frame(Frame, Axes<FixedAlignment>),
     /// A frame for an absolutely (not floatingly) placed child.
@@ -131,7 +133,7 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
         match child {
             Child::Tag(tag) => self.tag(tag),
             Child::Rel(amount, weakness) => self.rel(*amount, *weakness),
-            Child::Fr(fr) => self.fr(*fr),
+            Child::Fr(fr, minimum, weakness) => self.fr(*fr, *minimum, *weakness),
             Child::Line(line) => self.line(line)?,
             Child::Single(single) => self.single(single)?,
             Child::Multi(multi) => self.multi(multi)?,
@@ -159,7 +161,7 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
     /// Processes relative spacing.
     fn rel(&mut self, amount: Rel<Abs>, weakness: u8) {
         let amount = amount.relative_to(self.regions.base().y);
-        if weakness > 0 && !self.keep_spacing(amount, weakness) {
+        if weakness > 0 && !self.keep_spacing(Fr::zero(), amount, weakness) {
             return;
         }
 
@@ -168,14 +170,19 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
     }
 
     /// Processes fractional spacing.
-    fn fr(&mut self, fr: Fr) {
-        self.trim_spacing();
-        self.items.push(Item::Fr(fr, None));
+    fn fr(&mut self, fr: Fr, minimum: Rel<Abs>, weakness: u8) {
+        let amount = minimum.relative_to(self.regions.base().y);
+        if weakness > 0 && !self.keep_spacing(fr, amount, weakness) {
+            return;
+        }
+
+        self.regions.size.y -= amount;
+        self.items.push(Item::Fr(fr, amount, weakness));
     }
 
     /// Decides whether to keep weak spacing based on previous items. If there
     /// is a preceding weak spacing, it might be patched in place.
-    fn keep_spacing(&mut self, amount: Abs, weakness: u8) -> bool {
+    fn keep_spacing(&mut self, fractional: Fr, amount: Abs, weakness: u8) -> bool {
         for item in self.items.iter_mut().rev() {
             match *item {
                 Item::Abs(prev_amount, prev_weakness @ 1..) => {
@@ -183,13 +190,27 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
                         && (weakness < prev_weakness || amount > prev_amount)
                     {
                         self.regions.size.y -= amount - prev_amount;
-                        *item = Item::Abs(amount, weakness);
+                        if fractional.is_zero() {
+                            *item = Item::Abs(amount, weakness);
+                        } else {
+                            *item = Item::Fr(fractional, amount, weakness)
+                        }
                     }
                     return false;
                 }
-                Item::Tag(_) | Item::Abs(..) | Item::Placed(..) => {}
-                Item::Fr(.., None) => return false,
-                Item::Frame(..) | Item::Fr(.., Some(_)) => return true,
+                Item::Fr(prev_fractional, prev_amount, prev_weakness @ 1..) => {
+                    if weakness <= prev_weakness
+                        && (weakness < prev_weakness || fractional > prev_fractional || amount > prev_amount)
+                    {
+                        let new_amount = amount.max(prev_amount);
+                        let new_fractional = fractional.max(prev_fractional);
+                        self.regions.size.y -= new_amount - prev_amount;
+                        *item = Item::Fr(new_fractional, new_amount, weakness)
+                    }
+                    return false;
+                },
+                Item::Tag(_) | Item::Abs(..) | Item::Fr(..) | Item::Placed(..) => {}
+                Item::Frame(..) | Item::FrChild(..) => return true,
             }
         }
         false
@@ -204,8 +225,13 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
                     self.items.remove(i);
                     break;
                 }
-                Item::Tag(_) | Item::Abs(..) | Item::Placed(..) => {}
-                Item::Frame(..) | Item::Fr(..) => break,
+                Item::Fr(_, amount, 1..) => {
+                    self.regions.size.y += amount;
+                    self.items.remove(i);
+                    break;
+                }
+                Item::Tag(_)| Item::Abs(..) | Item::Fr(..) | Item::Placed(..) => {}
+                Item::Frame(..) | Item::FrChild(..) => break,
             }
         }
     }
@@ -215,11 +241,56 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
         for item in self.items.iter().rev() {
             match *item {
                 Item::Abs(amount, 1..) => return amount,
-                Item::Tag(_) | Item::Abs(..) | Item::Placed(..) => {}
-                Item::Frame(..) | Item::Fr(..) => break,
+                Item::Fr(_, amount, 1..) => return amount,
+                Item::Tag(_) | Item::Abs(..) | Item::Fr(..) | Item::Placed(..) => {}
+                Item::Frame(..) | Item::FrChild(..) => break,
             }
         }
         Abs::zero()
+    }
+
+
+    /// Clamp fractional spaces which don't reach their minimum size
+    /// to this minimum.
+    /// 
+    /// Returns the sum of fractional and minimum-spacing for the remaining fractional
+    /// spaces.
+    fn clamp_fractional_to_minimum(&mut self, mut frs: Fr, fr_space: Abs) -> (Fr, Abs) {
+        let mut cumulated_minimum: Abs = self.items
+            .iter()
+            .filter_map(|item| if let Item::Fr(_, minimum, ..) = item {
+                Some(minimum)
+            } else { None })
+            .sum();
+
+        let mut recalculation_necessary = true;
+        while recalculation_necessary {
+            recalculation_necessary = false;
+            let mut cumulated_minimum_new = Abs::zero();
+            let mut frs_new = Fr::zero();
+            for item in &mut self.items {
+                match item {
+                    Item::Fr(v, minimum, weakness) => {
+                        let share = v.share(frs, fr_space + cumulated_minimum);
+                        if share >= *minimum {
+                            cumulated_minimum_new += *minimum;
+                            frs_new += *v;
+                        } else {
+                            *item = Item::Abs(*minimum, *weakness);
+                            recalculation_necessary = true;
+                        }
+                    }
+                    Item::FrChild(v, _) => {
+                        frs_new += *v;
+                    }
+                    _ => ()
+                }
+            }
+            cumulated_minimum = cumulated_minimum_new;
+            frs = frs_new;
+        }
+
+        (frs, cumulated_minimum)
     }
 
     /// Processes a line of a paragraph.
@@ -260,7 +331,7 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
             self.composer
                 .footnotes(&self.regions, &frame, Abs::zero(), false, true)?;
             self.flush_tags();
-            self.items.push(Item::Fr(fr, Some(single)));
+            self.items.push(Item::FrChild(fr, single));
             return Ok(());
         }
 
@@ -467,9 +538,13 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
         for item in &self.items {
             match item {
                 Item::Abs(v, _) => used.y += *v,
-                Item::Fr(v, child) => {
+                Item::Fr(v, minimum, _) => {
                     frs += *v;
-                    has_fr_child |= child.is_some();
+                    used.y += *minimum;
+                }
+                Item::FrChild(v, _) => {
+                    frs += *v;
+                    has_fr_child = true;
                 }
                 Item::Frame(frame, _) => {
                     used.y += frame.height();
@@ -486,12 +561,14 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
             used.y = region.size.y;
         }
 
+        let (frs, cumulated_minimum) = self.clamp_fractional_to_minimum(frs, fr_space);
+
         // Lay out fractionally sized blocks.
         let mut fr_frames = vec![];
         if has_fr_child {
             for item in &self.items {
-                let Item::Fr(v, Some(single)) = item else { continue };
-                let length = v.share(frs, fr_space);
+                let Item::FrChild(v, single) = item else { continue };
+                let length = v.share(frs, fr_space + cumulated_minimum);
                 let pod = Region::new(Size::new(region.size.x, length), region.expand);
                 let frame = single.layout(self.composer.engine, pod)?;
                 used.x.set_max(frame.width());
@@ -524,14 +601,16 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
                 Item::Abs(v, _) => {
                     offset += v;
                 }
-                Item::Fr(v, single) => {
-                    let length = v.share(frs, fr_space);
-                    if let Some(single) = single {
-                        let frame = fr_frames.next().unwrap();
-                        let x = single.align.x.position(size.x - frame.width());
-                        let pos = Point::new(x, offset);
-                        output.push_frame(pos, frame);
-                    }
+                Item::Fr(v, _, _) => {
+                    let length = v.share(frs, fr_space + cumulated_minimum);
+                    offset += length;
+                }
+                Item::FrChild(v, single) => {
+                    let length = v.share(frs, fr_space + cumulated_minimum);
+                    let frame = fr_frames.next().unwrap();
+                    let x = single.align.x.position(size.x - frame.width());
+                    let pos = Point::new(x, offset);
+                    output.push_frame(pos, frame);
                     offset += length;
                 }
                 Item::Frame(frame, align) => {
