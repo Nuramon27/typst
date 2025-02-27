@@ -186,22 +186,27 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
         for item in self.items.iter_mut().rev() {
             match *item {
                 Item::Abs(prev_amount, prev_weakness @ 1..) => {
-                    if weakness <= prev_weakness
-                        && (weakness < prev_weakness || amount > prev_amount)
-                    {
-                        self.regions.size.y -= amount - prev_amount;
+                    if weakness <= prev_weakness && (
+                        weakness < prev_weakness
+                        || !fractional.is_zero()
+                        || amount > prev_amount
+                    ) {
+                        let new_amount = amount.max(prev_amount);
+                        self.regions.size.y -= new_amount - prev_amount;
                         if fractional.is_zero() {
-                            *item = Item::Abs(amount, weakness);
+                            *item = Item::Abs(new_amount, weakness);
                         } else {
-                            *item = Item::Fr(fractional, amount, weakness)
+                            *item = Item::Fr(fractional, new_amount, weakness)
                         }
                     }
                     return false;
                 }
                 Item::Fr(prev_fractional, prev_amount, prev_weakness @ 1..) => {
-                    if weakness <= prev_weakness
-                        && (weakness < prev_weakness || fractional > prev_fractional || amount > prev_amount)
-                    {
+                    if weakness <= prev_weakness && (
+                        weakness < prev_weakness
+                        || fractional > prev_fractional
+                        || amount > prev_amount
+                    ) {
                         let new_amount = amount.max(prev_amount);
                         let new_fractional = fractional.max(prev_fractional);
                         self.regions.size.y -= new_amount - prev_amount;
@@ -252,7 +257,7 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
 
     /// Clamp fractional spaces which don't reach their minimum size
     /// to this minimum.
-    /// 
+    ///
     /// Returns the sum of fractional and minimum-spacing for the remaining fractional
     /// spaces.
     fn clamp_fractional_to_minimum(&mut self, mut frs: Fr, fr_space: Abs) -> (Fr, Abs) {
