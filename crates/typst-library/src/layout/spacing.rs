@@ -98,6 +98,9 @@ pub struct VElem {
     #[required]
     pub amount: Spacing,
 
+    #[default(Rel::zero())]
+    pub minimum: Rel,
+
     /// If `{true}`, the spacing collapses at the start or end of a flow.
     /// Moreover, from multiple adjacent weak spacings all but the largest one
     /// collapse. Weak spacings will always collapse adjacent paragraph spacing,
@@ -138,7 +141,7 @@ pub enum Spacing {
 impl Spacing {
     /// Whether this is fractional spacing.
     pub fn is_fractional(self) -> bool {
-        matches!(self, Self::Fr(_))
+        matches!(self, Self::Fr(..))
     }
 
     /// Whether the spacing is actually no spacing.

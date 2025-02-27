@@ -149,7 +149,7 @@ impl<'a> Collector<'a, '_, '_> {
             Spacing::Rel(rel) => {
                 Child::Rel(rel.resolve(styles), elem.weak.get(styles) as u8)
             }
-            Spacing::Fr(fr) => Child::Fr(fr, Rel::zero(), elem.weak.get(styles) as u8),
+            Spacing::Fr(fr) => Child::Fr(fr, elem.minimum.get(styles).resolve(styles), elem.weak.get(styles) as u8),
         });
     }
 
