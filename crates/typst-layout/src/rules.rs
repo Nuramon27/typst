@@ -330,6 +330,7 @@ const FIGURE_RULE: ShowFn<FigureElem> = |elem, _, styles| {
     realized = BlockElem::new()
         .with_body(Some(BlockBody::Content(realized)))
         .with_floatable(true)
+        .with_breakable(false)
         .pack()
         .spanned(span)
         .labelled(label);
