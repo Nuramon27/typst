@@ -101,7 +101,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         };
         drop(checkpoint);
 
-        Ok(self.page_insertions.finalize(self.work, self.config, output))
+        Ok(self.page_insertions.finalize(self.work, self.config, output, regions.base().y))
     }
 
     /// Lay out the inner contents of a container/page.
@@ -198,7 +198,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         }
 
         let insertions = std::mem::take(&mut self.column_insertions);
-        let mut output = insertions.finalize(self.work, self.config, inner);
+        let mut output = insertions.finalize(self.work, self.config, inner, regions.base().y);
 
         // Lay out per-column line numbers.
         if let Some(line_config) = &self.config.line_numbers {
@@ -307,7 +307,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         };
 
         // We only require clearance if there is other content.
-        let clearance = if clearance { placed.clearance() } else { Abs::zero() };
+        let clearance = if clearance { placed.clearance(regions.base().y) } else { Abs::zero() };
         let need = frame.height() + clearance;
 
         // If the float doesn't fit, queue it for the next region.
@@ -338,7 +338,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         };
 
         // Put the float there.
-        area.push_float(placed, frame, align_y);
+        area.push_float(placed, frame, align_y, regions.base().y);
         area.skips.push(loc);
 
         // Trigger relayout.
@@ -648,10 +648,11 @@ impl<'a, 'b> Insertions<'a, 'b> {
         placed: FloatableChild<'a, 'b>,
         frame: Frame,
         align_y: FixedAlignment,
+        base: Abs,
     ) {
         self.width.set_max(frame.width());
 
-        let amount = frame.height() + placed.clearance();
+        let amount = frame.height() + placed.clearance(base);
         let pair = (placed, frame);
 
         if align_y == FixedAlignment::Start {
@@ -686,7 +687,7 @@ impl<'a, 'b> Insertions<'a, 'b> {
 
     /// Produce a frame for the full region based on the `inner` frame produced
     /// by distribution or column layout.
-    fn finalize(self, work: &mut Work, config: &Config, inner: Frame) -> Frame {
+    fn finalize(self, work: &mut Work, config: &Config, inner: Frame, base: Abs) -> Frame {
         work.extend_skips(&self.skips);
 
         if self.top_floats.is_empty()
@@ -707,7 +708,7 @@ impl<'a, 'b> Insertions<'a, 'b> {
             let x = placed.align_x().position(size.x - frame.width());
             let y = offset_top;
             let delta = placed.delta().zip_map(size, Rel::relative_to).to_point();
-            offset_top += frame.height() + placed.clearance();
+            offset_top += frame.height() + placed.clearance(base);
             output.push_frame(Point::new(x, y) + delta, frame);
         }
 
@@ -722,7 +723,7 @@ impl<'a, 'b> Insertions<'a, 'b> {
         // with `\usepackage[bottom]{footmisc}`. We could also consider adding
         // configuration in the future.
         for (placed, frame) in self.bottom_floats {
-            offset_bottom += placed.clearance();
+            offset_bottom += placed.clearance(base);
             let x = placed.align_x().position(size.x - frame.width());
             let y = offset_bottom;
             let delta = placed.delta().zip_map(size, Rel::relative_to).to_point();

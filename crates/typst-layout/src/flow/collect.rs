@@ -413,6 +413,15 @@ impl SingleChild<'_> {
     pub fn location(&self) -> Location {
         self.elem.location().unwrap()
     }
+
+    pub fn below(&self) -> Rel<Abs> {
+        match self.elem
+            .below(self.styles.clone())
+        {
+            Smart::Custom(Spacing::Rel(length)) => length.resolve(self.styles.clone()),
+            _ => ParElem::spacing_in(self.styles.clone()).into()
+        }
+    }
 }
 
 /// The cached, internal implementation of [`SingleChild::layout`].

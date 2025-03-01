@@ -305,9 +305,9 @@ impl<'a, 'b> FloatableChild<'a, 'b> {
         }
     }
 
-    pub fn clearance(&self) -> Abs {
+    pub fn clearance(&self, whole: Abs) -> Abs {
         match self {
-            Self::Block(_) => Abs::zero(),
+            Self::Block(elem) => elem.below().relative_to(whole),
             Self::Float(elem) => elem.clearance,
         }
     }
