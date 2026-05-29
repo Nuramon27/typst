@@ -1,7 +1,8 @@
 use std::fmt::{self, Debug, Formatter};
+use std::iter::FromIterator;
 
-use crate::foundations::{Content, cast, elem};
-use crate::layout::{Dir, Spacing};
+use crate::foundations::{Content, cast, Dict, elem};
+use crate::layout::{Dir, Length, Rel, Spacing};
 
 /// Arranges content and spacing horizontally or vertically.
 ///
@@ -54,7 +55,7 @@ pub struct StackElem {
 #[derive(Clone, PartialEq, Hash)]
 pub enum StackChild {
     /// Spacing between other children.
-    Spacing(Spacing),
+    Spacing(Spacing, Rel<Length>),
     /// Arbitrary block-level content.
     Block(Content),
 }
@@ -62,7 +63,12 @@ pub enum StackChild {
 impl Debug for StackChild {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Self::Spacing(kind) => kind.fmt(f),
+            Self::Spacing(spacing, minimum) => {
+                f.debug_map()
+                    .entry(&"spacing", spacing)
+                    .entry(&"minimum", minimum)
+                    .finish()
+                },
             Self::Block(block) => block.fmt(f),
         }
     }
@@ -71,9 +77,12 @@ impl Debug for StackChild {
 cast! {
     StackChild,
     self => match self {
-        Self::Spacing(spacing) => spacing.into_value(),
+        Self::Spacing(spacing, minimum) => Dict::from_iter([
+            ("spacing".into(), spacing.into_value()),
+            ("minimum".into(), minimum.into_value()
+        )]).into_value(),
         Self::Block(content) => content.into_value(),
     },
-    v: Spacing => Self::Spacing(v),
+    v: Spacing => Self::Spacing(v, Rel::zero()),
     v: Content => Self::Block(v),
 }

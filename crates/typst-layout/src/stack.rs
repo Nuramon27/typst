@@ -3,8 +3,8 @@ use typst_library::engine::Engine;
 use typst_library::foundations::{Content, Packed, Resolve, StyleChain, StyledElem};
 use typst_library::introspection::{Locator, SplitLocator};
 use typst_library::layout::{
-    Abs, AlignElem, Axes, Axis, Dir, FixedAlignment, Fr, Fragment, Frame, HElem, Point,
-    Regions, Size, Spacing, StackChild, StackElem, VElem,
+    Abs, AlignElem, Axes, Axis, Dir, FixedAlignment, Fr, Fragment, Frame, HElem, Length,
+    Point, Regions, Rel, Size, Spacing, StackChild, StackElem, VElem,
 };
 use typst_syntax::Span;
 use typst_utils::{Get, Numeric};
@@ -29,27 +29,27 @@ pub fn layout_stack(
 
     for child in &elem.children {
         match child {
-            StackChild::Spacing(kind) => {
-                layouter.layout_spacing(*kind);
+            StackChild::Spacing(kind, minimum) => {
+                layouter.layout_spacing(*kind, *minimum);
                 deferred = None;
             }
             StackChild::Block(block) => {
                 // Transparently handle `h`.
                 if let (Axis::X, Some(h)) = (axis, block.to_packed::<HElem>()) {
-                    layouter.layout_spacing(h.amount);
+                    layouter.layout_spacing(h.amount, Rel::zero());
                     deferred = None;
                     continue;
                 }
 
                 // Transparently handle `v`.
                 if let (Axis::Y, Some(v)) = (axis, block.to_packed::<VElem>()) {
-                    layouter.layout_spacing(v.amount);
+                    layouter.layout_spacing(v.amount, v.minimum.get(styles));
                     deferred = None;
                     continue;
                 }
 
                 if let Some(kind) = deferred {
-                    layouter.layout_spacing(kind);
+                    layouter.layout_spacing(kind, Rel::zero());
                 }
 
                 layouter.layout_block(engine, block, styles)?;
@@ -95,7 +95,7 @@ enum StackItem {
     /// Absolute spacing between other items.
     Absolute(Abs),
     /// Fractional spacing between other items.
-    Fractional(Fr),
+    Fractional(Fr, Abs),
     /// A frame for a layouted block.
     Frame(Frame, Axes<FixedAlignment>),
 }
@@ -132,7 +132,7 @@ impl<'a> StackLayouter<'a> {
     }
 
     /// Add spacing along the spacing direction.
-    fn layout_spacing(&mut self, spacing: Spacing) {
+    fn layout_spacing(&mut self, spacing: Spacing, minimum: Rel<Length>) {
         match spacing {
             Spacing::Rel(v) => {
                 // Resolve the spacing and limit it to the remaining space.
@@ -149,7 +149,16 @@ impl<'a> StackLayouter<'a> {
             }
             Spacing::Fr(v) => {
                 self.fr += v;
-                self.items.push(StackItem::Fractional(v));
+                let resolved_minimum = minimum
+                    .resolve(self.styles)
+                    .relative_to(self.regions.base().get(self.axis));
+                let remaining = self.regions.size.get_mut(self.axis);
+                let limited = resolved_minimum.min(*remaining);
+                if self.dir.axis() == Axis::Y {
+                    *remaining -= limited;
+                }
+                self.used.main += limited;
+                self.items.push(StackItem::Fractional(v, resolved_minimum));
             }
         }
     }
@@ -209,6 +218,46 @@ impl<'a> StackLayouter<'a> {
         Ok(())
     }
 
+    /// Clamp fractional spaces which don't reach their minimum size
+    /// to this minimum.
+    ///
+    /// Returns the sum of minimum-spacing for the remaining fractional
+    /// spaces.
+    fn clamp_fractional_to_minimum(&mut self, fr_space: Abs) -> Abs {
+        let mut cumulated_minimum: Abs = self.items
+            .iter()
+            .filter_map(|item| if let StackItem::Fractional(_, minimum) = item {
+                Some(minimum)
+            } else { None })
+            .sum();
+
+        let mut recalculation_necessary = true;
+        while recalculation_necessary {
+            recalculation_necessary = false;
+            let mut cumulated_minimum_new = Abs::zero();
+            let mut frs_new = Fr::zero();
+            for item in &mut self.items {
+                match item {
+                    StackItem::Fractional(v, minimum) => {
+                        let share = v.share(self.fr, fr_space + cumulated_minimum);
+                        if share >= *minimum {
+                            cumulated_minimum_new += *minimum;
+                            frs_new += *v;
+                        } else {
+                            *item = StackItem::Absolute(*minimum);
+                            recalculation_necessary = true;
+                        }
+                    },
+                    _ => ()
+                }
+            }
+            cumulated_minimum = cumulated_minimum_new;
+            self.fr = frs_new;
+        }
+
+        cumulated_minimum
+    }
+
     /// Advance to the next region.
     fn finish_region(&mut self) -> SourceResult<()> {
         // Determine the size of the stack in this region depending on whether
@@ -230,6 +279,8 @@ impl<'a> StackLayouter<'a> {
             bail!(self.span, "stack spacing is infinite");
         }
 
+        let cumulated_minimum = self.clamp_fractional_to_minimum(remaining);
+
         let mut output = Frame::hard(size);
         let mut cursor = Abs::zero();
         let mut ruler: FixedAlignment = self.dir.start().into();
@@ -238,7 +289,7 @@ impl<'a> StackLayouter<'a> {
         for item in self.items.drain(..) {
             match item {
                 StackItem::Absolute(v) => cursor += v,
-                StackItem::Fractional(v) => cursor += v.share(self.fr, remaining),
+                StackItem::Fractional(v, _) => cursor += v.share(self.fr, remaining + cumulated_minimum),
                 StackItem::Frame(frame, align) => {
                     if self.dir.is_positive() {
                         ruler = ruler.max(align.get(self.axis));
