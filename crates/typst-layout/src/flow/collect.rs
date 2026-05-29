@@ -416,10 +416,10 @@ impl SingleChild<'_> {
 
     pub fn below(&self) -> Rel<Abs> {
         match self.elem
-            .below(self.styles.clone())
+            .below.get(self.styles.clone())
         {
             Smart::Custom(Spacing::Rel(length)) => length.resolve(self.styles.clone()),
-            _ => ParElem::spacing_in(self.styles.clone()).into()
+            _ => self.styles.get(ParElem::spacing).resolve(self.styles.clone()).into()
         }
     }
 }
